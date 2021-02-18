@@ -1,0 +1,266 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environment": {
+      "type": "string",
+      "allowedValues": [
+        "test"
+      ]
+    }
+  },
+  "variables": {
+    "applicationInsightsName": "[concat('testingdemo-functions-', parameters('environment'))]",
+    "storageAccountName": "[concat('testingdemo', parameters('environment'))]",
+    "storageAccountid": "[concat(resourceGroup().id,'/providers/','Microsoft.Storage/storageAccounts/', variables('storageAccountName'))]",
+    "serviceBusNamespaceName": "[concat('testingdemo-', parameters('environment'))]",
+    "completedTodosQueueName": "completedtodos",
+    "cosmosAccountName": "[concat('testingdemo-', parameters('environment'))]",
+    "databaseName": "database",
+    "collectionName": "todos",
+    "appServicePlanName": "[concat('testingdemo-', parameters('environment'))]",
+    "apiAppServiceName": "[concat('testingdemo-api-', parameters('environment'))]",
+    "functionAppServiceName": "[concat('testingdemo-functions-', parameters('environment'))]"
+  },
+  "resources": [
+    {
+      "type": "microsoft.insights/components",
+      "apiVersion": "2018-05-01-preview",
+      "name": "[variables('applicationInsightsName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "ApplicationId": "[variables('applicationInsightsName')]",
+        "Application_Type": "web"
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2019-04-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[resourceGroup().location]",
+      "kind": "StorageV2",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "properties": {
+        "supportsHttpsTrafficOnly": true
+      }
+    },
+    {
+      "type": "Microsoft.ServiceBus/namespaces",
+      "apiVersion": "2017-04-01",
+      "name": "[variables('serviceBusNamespaceName')]",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "Standard"
+      },
+      "resources": [
+        {
+          "apiVersion": "2017-04-01",
+          "name": "[variables('completedTodosQueueName')]",
+          "type": "Queues",
+          "dependsOn": [
+            "[concat('Microsoft.ServiceBus/namespaces/', variables('serviceBusNamespaceName'))]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2016-03-31",
+      "name": "[variables('cosmosAccountName')]",
+      "location": "[resourceGroup().location]",
+      "kind": "GlobalDocumentDB",
+      "properties": {
+        "databaseAccountOfferType": "Standard",
+        "name": "[variables('cosmosAccountName')]",
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "Session",
+          "maxIntervalInSeconds": 5,
+          "maxStalenessPrefix": 100
+        }
+      },
+      "resources": [
+        {
+          "type": "Microsoft.DocumentDB/databaseAccounts/apis/databases",
+          "name": "[concat(variables('cosmosAccountName'), '/sql/', variables('databaseName'))]",
+          "apiVersion": "2016-03-31",
+          "properties": {
+            "resource": {
+              "id": "[variables('databaseName')]"
+            },
+            "options": {
+              "throughput": 400
+            }
+          },
+          "dependsOn": [
+            "[variables('cosmosAccountName')]"
+          ],
+          "resources": [
+            {
+              "type": "Microsoft.DocumentDb/databaseAccounts/apis/databases/containers",
+              "name": "[concat(variables('cosmosAccountName'), '/sql/', variables('databaseName'), '/', variables('collectionName'))]",
+              "apiVersion": "2016-03-31",
+              "properties": {
+                "resource": {
+                  "id": "[variables('collectionName')]",
+                  "partitionKey": {
+                    "paths": [
+                      "/id"
+                    ],
+                    "kind": "Hash"
+                  },
+                  "indexingPolicy": {
+                    "indexingMode": "consistent",
+                    "automatic": true,
+                    "includedPaths": [
+                      {
+                        "path": "/*"
+                      }
+                    ],
+                    "excludedPaths": [
+                      {
+                        "path": "/\"_etag\"/?"
+                      }
+                    ]
+
+                  }
+                }
+              },
+              "dependsOn": [
+                "[variables('databaseName')]"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2015-08-01",
+      "name": "[variables('appServicePlanName')]",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "S1",
+        "capacity": 1
+      },
+      "resources": [
+        {
+          "type": "Microsoft.Web/sites",
+          "apiVersion": "2015-08-01",
+          "name": "[variables('functionAppServiceName')]",
+          "location": "[resourceGroup().location]",
+          "kind": "functionapp",
+          "dependsOn": [
+            "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+            "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+          ],
+          "identity": {
+            "type": "SystemAssigned"
+          },
+          "properties": {
+            "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+            "siteConfig": {
+              "AlwaysOn": true
+            },
+            "httpsOnly": true
+          },
+          "resources": [
+            {
+              "apiVersion": "2015-08-01",
+              "name": "appsettings",
+              "type": "config",
+              "dependsOn": [
+                "[variables('functionAppServiceName')]"
+              ],
+              "properties": {
+                "APPINSIGHTS_INSTRUMENTATIONKEY": "[reference(resourceId('microsoft.insights/components/', variables('applicationInsightsName')), '2015-05-01').InstrumentationKey]",
+                "AzureWebJobsDashboard": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';AccountKey=', listKeys(variables('storageAccountid'),'2015-05-01-preview').key1)]",
+                "AzureWebJobsStorage": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';AccountKey=', listKeys(variables('storageAccountid'),'2015-05-01-preview').key1)]",
+                "FUNCTIONS_WORKER_RUNTIME": "dotnet",
+                "FUNCTIONS_EXTENSION_VERSION": "~3",
+                "WEBSITE_RUN_FROM_PACKAGE": "1",
+                "CosmosDb:ConnectionString": "[concat('AccountEndpoint=https://', variables('cosmosAccountName'), '.documents.azure.com:443/;AccountKey=', listKeys(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosAccountName')), '2015-04-08').primaryMasterKey, ';')]",
+                "ServiceBus:NamespaceConnectionString": "[listKeys(resourceId('Microsoft.ServiceBus/namespaces/authorizationRules', variables('serviceBusNamespaceName'), 'RootManageSharedAccessKey'),'2015-08-01').primaryConnectionString]",
+                "ServiceBus:CompletedTodosQueueName": "[variables('completedTodosQueueName')]"
+              }
+            }
+          ]
+        },
+        {
+          "type": "Microsoft.Web/sites",
+          "apiVersion": "2015-08-01",
+          "name": "[variables('apiAppServiceName')]",
+          "location": "[resourceGroup().location]",
+          "kind": "app",
+          "dependsOn": [
+            "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]"
+          ],
+          "identity": {
+            "type": "SystemAssigned"
+          },
+          "properties": {
+            "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+            "siteConfig": {
+              "AlwaysOn": true
+            },
+            "httpsOnly": true
+          },
+          "resources": [
+            {
+              "apiVersion": "2015-08-01",
+              "name": "appsettings",
+              "type": "config",
+              "dependsOn": [
+                "[variables('apiAppServiceName')]"
+              ],
+              "properties": {
+                "APPINSIGHTS_INSTRUMENTATIONKEY": "[reference(resourceId('microsoft.insights/components/', variables('applicationInsightsName')), '2015-05-01').InstrumentationKey]",
+                "WEBSITE_RUN_FROM_PACKAGE": "1",
+                "CosmosDb:DbEndpoint": "[concat('https://', variables('cosmosAccountName'), '.documents.azure.com:443/')]",
+                "CosmosDb:DbKey": "[listKeys(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosAccountName')), '2015-04-08').primaryMasterKey]",
+                "CosmosDb:DatabaseName": "[variables('databaseName')]",
+                "CosmosDb:CollectionName": "[variables('collectionName')]"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "outputs": {
+    "CosmosDbEndpoint": {
+      "condition": "[equals(parameters('environment'), 'test')]",
+      "type": "string",
+      "value": "[concat('https://', variables('cosmosAccountName'), '.documents.azure.com:443/')]"
+    },
+    "CosmosDbKey": {
+      "condition": "[equals(parameters('environment'), 'test')]",
+      "type": "string",
+      "value": "[listKeys(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('cosmosAccountName')), '2015-04-08').primaryMasterKey]"
+    },
+    "CosmosDbDatabaseName": {
+      "condition": "[equals(parameters('environment'), 'test')]",
+      "type": "string",
+      "value": "[variables('databaseName')]"
+    },
+    "CosmosDbCollectionName": {
+      "condition": "[equals(parameters('environment'), 'test')]",
+      "type": "string",
+      "value": "[variables('collectionName')]"
+    },
+    "ServiceBusConnectionString": {
+      "condition": "[equals(parameters('environment'), 'test')]",
+      "type": "string",
+      "value": "[listKeys(resourceId('Microsoft.ServiceBus/namespaces/authorizationRules', variables('serviceBusNamespaceName'), 'RootManageSharedAccessKey'),'2015-08-01').primaryConnectionString]"
+    },
+    "ApiAppServiceName": {
+      "type": "string",
+      "value": "[variables('apiAppServiceName')]"
+    },
+    "FunctionAppServiceName": {
+      "type": "string",
+      "value": "[variables('functionAppServiceName')]"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>netcoreapp3.1</TargetFramework>
+  </PropertyGroup>
+
+
+  <ItemGroup>
+    <ProjectReference Include="..\TestingDemo.TodoApi.Business\TestingDemo.TodoApi.Business.csproj" />
+    <ProjectReference Include="..\TestingDemo.TodoApi.Persistence\TestingDemo.TodoApi.Persistence.csproj" />
+  </ItemGroup>
+
+</Project>

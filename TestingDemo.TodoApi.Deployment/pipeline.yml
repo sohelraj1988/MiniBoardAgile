@@ -1,0 +1,269 @@
+﻿variables:
+  NUGET_XMLDOC_MODE: skip
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  buildConfiguration: Release
+  
+trigger: 
+- master
+
+pool:
+  name: 'SelfHostedWindows'
+
+stages:
+- stage: build
+  displayName: Build
+  jobs:
+  - job: build_arm_template
+    displayName: Build the ARM Template
+    steps:
+    - task: CopyFiles@2
+      displayName: 'Copy Files to: ($Build.ArtifactStagingDirectory)\arm-template'
+      inputs:
+        SourceFolder: 'TestingDemo.TodoApi.Deployment'
+        Contents: '**\*.json'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)\arm-template'
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Pipeline Artifact'
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)\arm-template'
+        artifact: 'arm-template'
+
+  - job: build_binaries
+    displayName: Build the Binary packages
+    steps:
+    - task: UseDotNet@2
+      displayName: 'Using .Net Core 3.1'
+      inputs:
+        packageType: "sdk"
+        version: "3.1.200"
+
+    - task: DotNetCoreCLI@2
+      displayName: "Restore Packages"
+      inputs:
+        command: "restore"
+        projects: "**/*.csproj"
+        includeNuGetOrg: true
+
+    - task: DotNetCoreCLI@2
+      displayName: "Compile sources"
+      inputs:
+        command: "build"
+        projects: "**/*.csproj"
+        arguments: "--configuration $(buildConfiguration) --no-restore"
+
+    - task: DotNetCoreCLI@2
+      displayName: "Run unit tests"
+      inputs:
+        command: "test"
+        projects: "**/*.UnitTest.csproj"
+
+    - task: DotNetCoreCLI@2
+      displayName: "Publish integration tests"
+      inputs:
+        command: publish
+        publishWebProjects: false
+        modifyOutputPath: false
+        projects: "**/*.IntegrationTest.csproj"
+        arguments: "--output $(Build.artifactstagingdirectory)/integrationtests-package/ --no-restore"
+        zipAfterPublish: false
+
+    - task: DotNetCoreCLI@2
+      displayName: "Publish system tests"
+      inputs:
+        command: publish
+        publishWebProjects: false
+        modifyOutputPath: false
+        projects: "**/*.SystemTest.csproj"
+        arguments: "--output $(Build.artifactstagingdirectory)/systemtests-package/ --no-restore"
+        zipAfterPublish: false
+
+    - task: DotNetCoreCLI@2
+      displayName: Publish WebApi Package
+      inputs:
+        command: publish
+        publishWebProjects: True
+        arguments: "--configuration $(BuildConfiguration) --output $(build.artifactstagingdirectory)/webapi-package"
+        zipAfterPublish: True
+
+    - task: PublishPipelineArtifact@0
+      displayName: "Publish Artifact: webapi-package"
+      inputs:
+        artifactName: "webapi-package"
+        targetPath: "$(Build.ArtifactStagingDirectory)/webapi-package"
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish Function Package'
+      inputs:
+        command: 'publish'
+        projects: '$(Build.SourcesDirectory)/TestingDemo.TodoApi.Functions/TestingDemo.TodoApi.Functions.csproj'
+        arguments: '--configuration Release --output $(Build.ArtifactStagingDirectory)/functions-package'
+        publishWebProjects: false
+
+    - task: PublishPipelineArtifact@0
+      displayName: "Publish Artifact: functions-package"
+      inputs:
+        artifactName: "functions-package"
+        targetPath: "$(Build.ArtifactStagingDirectory)/functions-package"
+
+    - task: CopyFiles@2
+      displayName: 'Copy Files to: ($Build.ArtifactStagingDirectory)\integrationtests-package'
+      inputs:
+        SourceFolder: 'TestingDemo.TodoApi.Deployment'
+        Contents: '**\*.runsettings'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)\integrationtests-package'
+
+    - task: PublishPipelineArtifact@0
+      displayName: "Publish Artifact: integrationtests-package"
+      inputs:
+        artifactName: "integrationtests-package"
+        targetPath: "$(Build.ArtifactStagingDirectory)/integrationtests-package"
+
+    - task: CopyFiles@2
+      displayName: 'Copy Files to: ($Build.ArtifactStagingDirectory)\systemtests-package'
+      inputs:
+        SourceFolder: 'TestingDemo.TodoApi.Deployment'
+        Contents: '**\*.runsettings'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)\systemtests-package'
+
+    - task: PublishPipelineArtifact@0
+      displayName: "Publish Artifact: systemtests-package"
+      inputs:
+        artifactName: "systemtests-package"
+        targetPath: "$(Build.ArtifactStagingDirectory)/systemtests-package"
+
+
+- stage: test
+  displayName: 'Test'
+  variables:
+    DeploymentServiceConnectionName: 'TestingDemo'
+    ResourceGroupName: 'TestingDemo'
+    Location: "West Europe"
+  jobs:
+    - job: 'deploy_to_test'
+      displayName: 'Deploy to test'
+      steps:
+      - task: DownloadPipelineArtifact@0
+        displayName: "Download Artifact: arm-template"
+        inputs:
+          artifactName: "arm-template"
+          targetPath: $(System.DefaultWorkingDirectory)/arm-template
+
+      - task: AzureResourceGroupDeployment@2
+        displayName: "ARM template deployment"
+        inputs:
+          azureSubscription: "${{ variables.DeploymentServiceConnectionName }}"
+          resourceGroupName: $(ResourceGroupName)
+          location: $(Location)
+          csmFile: "$(System.DefaultWorkingDirectory)/arm-template/azuredeploy.json"
+          overrideParameters: '-environment "test"'
+          deploymentMode: Incremental
+
+      - task: DownloadPipelineArtifact@0
+        displayName: 'Download Artifact for integration tests'
+        inputs:
+          artifactName: 'functions-package'
+          targetPath: $(System.DefaultWorkingDirectory)/functions-package
+
+      - task: DownloadPipelineArtifact@0
+        displayName: 'Download Artifact for integration tests'
+        inputs:
+          artifactName: 'webapi-package'
+          targetPath: $(System.DefaultWorkingDirectory)/webapi-package
+
+      - task: 'ARM Outputs@5'
+        displayName: 'Fetch ARM Outputs'
+        inputs:
+          ConnectedServiceNameARM: "${{ variables.DeploymentServiceConnectionName }}"
+          resourceGroupName: '$(ResourceGroupName)'
+
+      - task: AzureRmWebAppDeployment@4
+        displayName: "API App Deploy: Api API"
+        inputs:
+          azureSubscription: "${{ variables.DeploymentServiceConnectionName }}"
+          appType: web
+          webAppName: '$(ApiAppServiceName)'
+          package: "$(System.DefaultWorkingDirectory)/webapi-package/TestingDemo.TodoApi.Api.zip"
+          deploymentMode: runFromPackage
+
+      - task: AzureRmWebAppDeployment@4
+        displayName: 'Azure Function App Deploy: Function App'
+        inputs:
+          azureSubscription: '${{ variables.DeploymentServiceConnectionName }}'
+          appType: functionApp
+          webAppName: '$(FunctionAppServiceName)'
+          package: '$(System.DefaultWorkingDirectory)/functions-package/TestingDemo.TodoApi.Functions.zip'
+          deploymentMode: runFromPackage
+
+    - job: 'run_integration_test'
+      dependsOn:
+      - 'deploy_to_test'
+      displayName: 'Run integration tests'
+      steps:
+      - task: DownloadPipelineArtifact@0
+        displayName: 'Download Artifact for integration tests'
+        inputs:
+          artifactName: 'integrationtests-package'
+          targetPath: $(System.DefaultWorkingDirectory)/integrationtests-package
+
+      - task: 'ARM Outputs@5'
+        displayName: 'Fetch ARM Outputs'
+        inputs:
+          ConnectedServiceNameARM: "${{ variables.DeploymentServiceConnectionName }}"
+          resourceGroupName: '$(ResourceGroupName)'
+    
+      - task: UseDotNet@2
+        displayName: 'Using .Net Core 3.1'
+        inputs:
+          packageType: 'sdk'
+          version: '3.1.200'
+
+      - task: qetza.replacetokens.replacetokens-task.replacetokens@3
+        displayName: 'Replace variables in all runsetting file'
+        inputs:
+          actionOnMissing: fail
+          targetFiles: '$(System.DefaultWorkingDirectory)/integrationtests-package/TestingDemo.TodoApi.runsettings'
+
+      - task: DotNetCoreCLI@2
+        displayName: 'Running integration tests'
+        inputs:
+          command: 'custom'
+          custom: 'vstest'
+          projects: '$(System.DefaultWorkingDirectory)/integrationtests-package/*IntegrationTest.dll'
+          arguments: '--settings:$(System.DefaultWorkingDirectory)/integrationtests-package/TestingDemo.TodoApi.runsettings'
+
+    - job: 'run_system_test'
+      dependsOn:
+      - 'run_integration_test'
+      displayName: 'Run system tests'
+      steps:
+      - task: DownloadPipelineArtifact@0
+        displayName: 'Download Artifact for system tests'
+        inputs:
+          artifactName: 'systemtests-package'
+          targetPath: $(System.DefaultWorkingDirectory)/systemtests-package
+
+      - task: 'ARM Outputs@5'
+        displayName: 'Fetch ARM Outputs'
+        inputs:
+          ConnectedServiceNameARM: "${{ variables.DeploymentServiceConnectionName }}"
+          resourceGroupName: '$(ResourceGroupName)'
+    
+      - task: UseDotNet@2
+        displayName: 'Using .Net Core 3.1'
+        inputs:
+          packageType: 'sdk'
+          version: '3.1.200'
+
+      - task: qetza.replacetokens.replacetokens-task.replacetokens@3
+        displayName: 'Replace variables in all runsetting file'
+        inputs:
+          actionOnMissing: fail
+          targetFiles: '$(System.DefaultWorkingDirectory)/systemtests-package/TestingDemo.TodoApi.runsettings'
+
+      - task: DotNetCoreCLI@2
+        displayName: 'Running integration tests'
+        inputs:
+          command: 'custom'
+          custom: 'vstest'
+          projects: '$(System.DefaultWorkingDirectory)/systemtests-package/*SystemTest.dll'
+          arguments: '--settings:$(System.DefaultWorkingDirectory)/systemtests-package/TestingDemo.TodoApi.runsettings'

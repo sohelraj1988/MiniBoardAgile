@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <TestRunParameters>
+    <Parameter name="CosmosDbEndpoint" value="#{CosmosDbEndpoint}#" />
+    <Parameter name="CosmosDbKey" value="#{CosmosDbKey}#" />
+    <Parameter name="CosmosDbDatabaseName" value="#{CosmosDbDatabaseName}#" />
+    <Parameter name="CosmosDbCollectionName" value="#{CosmosDbCollectionName}#" />
+    <Parameter name="ServiceBusConnectionString" value="#{ServiceBusConnectionString}#" />
+  </TestRunParameters>
+</RunSettings>
